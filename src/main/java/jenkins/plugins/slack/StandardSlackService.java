@@ -1,29 +1,18 @@
 package jenkins.plugins.slack;
 
-import hudson.security.ACL;
-
-import org.jenkinsci.plugins.plaincredentials.StringCredentials;
-
-import com.cloudbees.plugins.credentials.CredentialsMatcher;
-import com.cloudbees.plugins.credentials.CredentialsMatchers;
-import com.cloudbees.plugins.credentials.domains.DomainRequirement;
-
-import org.json.JSONArray;
-import org.json.JSONObject;
-
+import java.io.IOException;
 import java.io.UnsupportedEncodingException;
-import java.io.InputStream;
 import java.net.URLEncoder;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import java.util.ArrayList;
-
-import jenkins.model.Jenkins;
-import hudson.ProxyConfiguration;
 
 import org.apache.commons.lang.StringUtils;
+import org.apache.http.HttpHost;
+import org.apache.http.HttpStatus;
+import org.apache.http.NameValuePair;
 import org.apache.http.auth.AuthScope;
 import org.apache.http.auth.UsernamePasswordCredentials;
 import org.apache.http.client.CredentialsProvider;
@@ -38,10 +27,17 @@ import org.apache.http.impl.client.HttpClients;
 import org.apache.http.impl.conn.DefaultProxyRoutePlanner;
 import org.apache.http.message.BasicNameValuePair;
 import org.apache.http.util.EntityUtils;
-import org.apache.http.HttpEntity;
-import org.apache.http.HttpHost;
-import org.apache.http.HttpStatus;
-import org.apache.http.NameValuePair;
+import org.jenkinsci.plugins.plaincredentials.StringCredentials;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import com.cloudbees.plugins.credentials.CredentialsMatcher;
+import com.cloudbees.plugins.credentials.CredentialsMatchers;
+import com.cloudbees.plugins.credentials.domains.DomainRequirement;
+
+import hudson.ProxyConfiguration;
+import hudson.security.ACL;
+import jenkins.model.Jenkins;
 
 public class StandardSlackService implements SlackService {
 
@@ -68,18 +64,46 @@ public class StandardSlackService implements SlackService {
         this.roomIds = roomId.split("[,; ]+");
     }
 
-    public boolean publish(String message) {
+    @Override
+    public SlackResponse publish(String message) {
         return publish(message, "warning");
     }
 
-    public boolean publish(String message, String color) {
-        boolean result = true;
+    @Override
+    public SlackResponse publish(String message, String color) {
+        return publish(message, color, "", false);
+    }
+
+    @Override
+    public SlackResponse publish(String message, String color, String threadTs, boolean replyBroadcast) {
+        SlackResponse result = new SlackResponse();
+        result.setSuccess(true);
+        boolean isThreaded = StringUtils.isNotEmpty(threadTs);
+
         for (String roomId : roomIds) {
             //prepare attachments first
             JSONObject attachment = new JSONObject();
             attachment.put("text", message);
             attachment.put("fallback", message);
             attachment.put("color", color);
+
+            if (isThreaded) {
+                // If we are sending to a thread, we can't go across multiple channels, you cannot
+                // send a threaded message to more than one channel. Slack will return an OK, but
+                // the message does not get shown in Slack.
+                if (roomIds.length > 1) {
+                    result.setSuccess(false);
+                    logger.log(Level.SEVERE,
+                            String.format(
+                                    "Error posting to Slack: Cannot send threaded message to more than 1 room, no messages will be sent.  Found trying to send to: %s",
+                                    roomIds.toString()));
+                    break;
+                }
+
+                result.setThreadTs(threadTs);
+                attachment.put("thread_ts", threadTs);
+                attachment.put("reply_broadcast", replyBroadcast);
+            }
 
             JSONArray mrkdwn = new JSONArray();
             mrkdwn.put("pretext");
@@ -118,7 +142,8 @@ public class StandardSlackService implements SlackService {
                 }
                 post = new HttpPost(url);
             }
-            logger.fine("Posting: to " + roomId + " on " + teamDomain + " using " + url + ": " + message + " " + color);
+            logger.fine("Posting: to " + roomId + " on " + teamDomain + " using " + url + ": " + message + " " + color
+                    + "(threadTs = " + threadTs + " with replyBroadcast = " + replyBroadcast + ")");
             CloseableHttpClient client = getHttpClient();
 
             try {
@@ -127,17 +152,30 @@ public class StandardSlackService implements SlackService {
             	
             	int responseCode = response.getStatusLine().getStatusCode();
             	if(responseCode != HttpStatus.SC_OK) {
-            		 HttpEntity entity = response.getEntity();
-            		 String responseString = EntityUtils.toString(entity);
-            		 logger.log(Level.WARNING, "Slack post may have failed. Response: " + responseString);
-            		 logger.log(Level.WARNING, "Response Code: " + responseCode);
-            		 result = false;
+                    logger.log(Level.WARNING, "Slack post may have failed. Response: " + getEntityAsString(response));
+                    logger.log(Level.WARNING, "Response Code: " + responseCode);
+                    result.setSuccess(false);
                 } else {
-                    logger.info("Posting succeeded");
+                    populateResponse(response, result);
+
+                    // Slack will return an OK when you post a threaded message to a channel
+                    // that was not the original channel, the key difference in a success v
+                    // a fail in this scenario is the existence of the thread_ts value, meaning
+                    // a successful posting that found the thread. We should treat this as a
+                    // failure.
+                    if (isThreaded && result.getThreadTs() == null) {
+                        logger.log(Level.WARNING, "Slack threaded post has failed to find the thread in channel "
+                                + roomId + " with thread_ts " + threadTs
+                                + ".  Please check the original message channel and ts response.");
+                        result.setSuccess(false);
+                        continue;
+                    } else {
+                        logger.info("Posting succeeded. Response: " + getEntityAsString(response));
+                    }
                 }
             } catch (Exception e) {
                 logger.log(Level.WARNING, "Error posting to Slack", e);
-                result = false;
+                result.setSuccess(false);
             } finally {
                 post.releaseConnection();
             }
@@ -192,5 +230,24 @@ public class StandardSlackService implements SlackService {
 
     void setHost(String host) {
         this.host = host;
+    }
+
+    void populateResponse(CloseableHttpResponse httpResponse, SlackResponse slackResponse)
+            throws IOException {
+        String slackString = getEntityAsString(httpResponse);
+        JSONObject slackJson = new JSONObject(slackString);
+        
+        String channel = slackJson.getString("channel");
+        String threadTs = slackJson.getJSONObject("message").getString("thread_ts");
+        String ts = slackJson.getString("ts");
+
+        slackResponse.setSuccess(slackJson.getBoolean("ok"));
+        slackResponse.setChannel(StringUtils.isNotEmpty(channel) ? channel : null);
+        slackResponse.setThreadTs(StringUtils.isNotEmpty(threadTs) ? threadTs : null);
+        slackResponse.setTs(StringUtils.isNotEmpty(ts) ? ts : null);
+    }
+
+    String getEntityAsString(CloseableHttpResponse httpResponse) throws IOException {
+        return EntityUtils.toString(httpResponse.getEntity());
     }
 }

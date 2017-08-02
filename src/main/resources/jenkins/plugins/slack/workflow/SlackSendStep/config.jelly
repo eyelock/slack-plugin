@@ -29,5 +29,11 @@
         <f:entry field="failOnError">
             <f:checkbox title="Fail On Error" default="false"/>
         </f:entry>
+        <f:entry field="threadTs">
+            <f:checkbox title="Threaded Message Parent thread_ts"/>
+        </f:entry>
+        <f:entry field="replyBroadcast">
+            <f:checkbox title="Threaded Message Reply Broadcast?" default="false"/>
+        </f:entry>
     </f:advanced>
 </j:jelly>

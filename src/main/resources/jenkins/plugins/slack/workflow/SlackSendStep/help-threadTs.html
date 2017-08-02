@@ -1,0 +1,18 @@
+<div>
+    <p>
+        If you want to send the message as part of a threaded group, you can specify the parent 
+        message's <code>ts</code> value as this value(found in the response from the original send). 
+    </p>
+    <p>
+        For example:<br/>
+        <code>
+            def parentMessage = slackSend message: 'Hello', channel: '#random'<br>
+            def childMessage = slackSend message: 'And to you!', channel: '#random', threadTs: parentMessage.ts
+        </code>
+    </p>
+    <p>
+        Note: If you try and send the message to more than one channel, the step will fail.  If 
+        you try and send the threaded message to an alternative channel than the parent message, this 
+        step will fail.
+    </p>
+</div>

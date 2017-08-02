@@ -1,15 +1,29 @@
 package jenkins.plugins.slack;
 
+import java.io.IOException;
+import java.util.Map;
+import java.util.logging.Logger;
+
+import org.apache.commons.lang.StringUtils;
+import org.jenkinsci.plugins.displayurlapi.DisplayURLProvider;
+import org.jenkinsci.plugins.plaincredentials.StringCredentials;
+import org.kohsuke.stapler.DataBoundConstructor;
+import org.kohsuke.stapler.DataBoundSetter;
+import org.kohsuke.stapler.QueryParameter;
+import org.kohsuke.stapler.StaplerRequest;
+import org.kohsuke.stapler.export.Exported;
+
 import com.cloudbees.plugins.credentials.common.StandardListBoxModel;
 import com.cloudbees.plugins.credentials.domains.HostnameRequirement;
+
 import hudson.EnvVars;
 import hudson.Extension;
 import hudson.Launcher;
 import hudson.model.AbstractBuild;
 import hudson.model.AbstractProject;
 import hudson.model.BuildListener;
-import hudson.model.Item;
 import hudson.model.Descriptor;
+import hudson.model.Item;
 import hudson.model.listeners.ItemListener;
 import hudson.security.ACL;
 import hudson.tasks.BuildStepDescriptor;
@@ -21,19 +35,6 @@ import hudson.util.ListBoxModel;
 import jenkins.model.Jenkins;
 import jenkins.plugins.slack.config.ItemConfigMigrator;
 import net.sf.json.JSONObject;
-
-import org.apache.commons.lang.StringUtils;
-import org.jenkinsci.plugins.displayurlapi.DisplayURLProvider;
-import org.jenkinsci.plugins.plaincredentials.StringCredentials;
-import org.kohsuke.stapler.DataBoundConstructor;
-import org.kohsuke.stapler.DataBoundSetter;
-import org.kohsuke.stapler.QueryParameter;
-import org.kohsuke.stapler.StaplerRequest;
-import org.kohsuke.stapler.export.Exported;
-
-import java.io.IOException;
-import java.util.Map;
-import java.util.logging.Logger;
 
 import static com.cloudbees.plugins.credentials.CredentialsProvider.lookupCredentials;
 
@@ -48,6 +49,8 @@ public class SlackNotifier extends Notifier {
     private boolean botUser;
     private String room;
     private String sendAs;
+    private String threadTs;
+    private boolean replyBroadcast;
     private boolean startNotification;
     private boolean notifySuccess;
     private boolean notifyAborted;
@@ -119,6 +122,24 @@ public class SlackNotifier extends Notifier {
 
     public String getSendAs() {
         return sendAs;
+    }
+
+    @DataBoundSetter
+    public void setThreadTs(String threadTs) {
+        this.threadTs = threadTs;
+    }
+
+    public String getThreadTs() {
+        return threadTs;
+    }
+
+    @DataBoundSetter
+    public void setReplyBroadcast(boolean replyBroadcast) {
+        this.replyBroadcast = replyBroadcast;
+    }
+
+    public boolean getReplyBroadcast() {
+        return replyBroadcast;
     }
 
     @DataBoundSetter
@@ -284,6 +305,7 @@ public class SlackNotifier extends Notifier {
         this.customMessage = customMessage;
     }
 
+    @Override
     public BuildStepMonitor getRequiredMonitorService() {
         return BuildStepMonitor.NONE;
     }
@@ -359,6 +381,8 @@ public class SlackNotifier extends Notifier {
         private boolean botUser;
         private String room;
         private String sendAs;
+        private String threadTs;
+        private boolean replyBroadcast;
 
         public static final CommitInfoChoice[] COMMIT_INFO_CHOICES = CommitInfoChoice.values();
 
@@ -394,6 +418,14 @@ public class SlackNotifier extends Notifier {
             return sendAs;
         }
 
+        public String getThreadTs() {
+            return threadTs;
+        }
+
+        public boolean getReplyBroadcast() {
+            return replyBroadcast;
+        }
+
         public ListBoxModel doFillTokenCredentialIdItems() {
             if (!Jenkins.getInstance().hasPermission(Jenkins.ADMINISTER)) {
                 return new ListBoxModel();
@@ -414,6 +446,7 @@ public class SlackNotifier extends Notifier {
             return FormValidation.warning("Exposing your Integration Token is a security risk. Please use the Integration Token Credential ID");
         }
 
+        @Override
         public boolean isApplicable(Class<? extends AbstractProject> aClass) {
             return true;
         }
@@ -507,8 +540,8 @@ public class SlackNotifier extends Notifier {
                 }
                 SlackService testSlackService = getSlackService(targetUrl, targetDomain, targetToken, targetTokenCredentialId, targetBotUser, targetRoom);
                 String message = "Slack/Jenkins plugin: you're all set on " + DisplayURLProvider.get().getRoot();
-                boolean success = testSlackService.publish(message, "good");
-                return success ? FormValidation.ok("Success") : FormValidation.error("Failure");
+                SlackResponse result = testSlackService.publish(message, "good");
+                return result.isSuccess() ? FormValidation.ok("Success") : FormValidation.error("Failure");
             } catch (Exception e) {
                 return FormValidation.error("Client error : " + e.getMessage());
             }

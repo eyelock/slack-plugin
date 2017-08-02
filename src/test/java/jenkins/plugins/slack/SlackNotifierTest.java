@@ -1,24 +1,25 @@
 package jenkins.plugins.slack;
 
-import hudson.model.Descriptor;
-import hudson.util.FormValidation;
-import junit.framework.TestCase;
+import java.util.Arrays;
+import java.util.Collection;
+
+import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.Before;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.jvnet.hudson.test.JenkinsRule;
 
-import java.util.Arrays;
-import java.util.Collection;
+import hudson.model.Descriptor;
+import hudson.util.FormValidation;
+import junit.framework.TestCase;
 
 @RunWith(Parameterized.class)
 public class SlackNotifierTest extends TestCase {
 
     private SlackNotifierStub.DescriptorImplStub descriptor;
     private SlackServiceStub slackServiceStub;
-    private boolean response;
+    private SlackResponse response;
     private FormValidation.Kind expectedResult;
 
     @Rule
@@ -30,7 +31,8 @@ public class SlackNotifierTest extends TestCase {
         descriptor = new SlackNotifierStub.DescriptorImplStub();
     }
 
-    public SlackNotifierTest(SlackServiceStub slackServiceStub, boolean response, FormValidation.Kind expectedResult) {
+    public SlackNotifierTest(SlackServiceStub slackServiceStub, SlackResponse response,
+            FormValidation.Kind expectedResult) {
         this.slackServiceStub = slackServiceStub;
         this.response = response;
         this.expectedResult = expectedResult;
@@ -39,9 +41,17 @@ public class SlackNotifierTest extends TestCase {
     @Parameterized.Parameters
     public static Collection businessTypeKeys() {
         return Arrays.asList(new Object[][]{
-                {new SlackServiceStub(), true, FormValidation.Kind.OK},
-                {new SlackServiceStub(), false, FormValidation.Kind.ERROR},
-                {null, false, FormValidation.Kind.ERROR}
+                {
+                        new SlackServiceStub(), SlackResponseTest.createSlackResponse(true),
+                        FormValidation.Kind.OK
+                }, {
+                        new SlackServiceStub(), SlackResponseTest.createSlackResponse(false),
+                        FormValidation.Kind.ERROR
+                },
+                {
+                        null, SlackResponseTest.createSlackResponse(false),
+                        FormValidation.Kind.ERROR
+                }
         });
     }
 
@@ -62,17 +72,24 @@ public class SlackNotifierTest extends TestCase {
 
     public static class SlackServiceStub implements SlackService {
 
-        private boolean response;
+        private SlackResponse response;
 
-        public boolean publish(String message) {
+        @Override
+        public SlackResponse publish(String message) {
             return response;
         }
 
-        public boolean publish(String message, String color) {
+        @Override
+        public SlackResponse publish(String message, String color) {
             return response;
         }
 
-        public void setResponse(boolean response) {
+        @Override
+        public SlackResponse publish(String message, String color, String threadTs, boolean replyBroadcast) {
+            return response;
+        }
+
+        public void setResponse(SlackResponse response) {
             this.response = response;
         }
     }
